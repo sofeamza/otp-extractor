@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "CLIC MMU Auto OTP",
+  "version": "1.0",
+  "description": "Automatically extracts OTP from Outlook and fills CLIC MMU login",
+  "permissions": ["storage", "activeTab", "tabs", "scripting"],
+  "host_permissions": ["https://clic.mmu.edu.my/*", "https://outlook.office.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://clic.mmu.edu.my/*"],
+      "js": ["clic-content.js"],
+      "run_at": "document_end"
+    },
+    {
+      "matches": ["https://outlook.office.com/*"],
+      "js": ["outlook-content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "CLIC MMU Auto OTP"
+  }
+}
