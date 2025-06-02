@@ -17,7 +17,7 @@ This Chrome extension automates the tedious OTP login process for CLIC MMU (Mult
 
 ## 🎬 Demo
 
-![CLIC Auto OTP Demo](demo.gif)
+![CLIC Auto OTP Demo](public/demo.gif)
 
 *Extension automatically extracting OTP from Outlook and logging into CLIC MMU*
 
