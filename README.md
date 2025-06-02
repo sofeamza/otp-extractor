@@ -52,7 +52,7 @@ This Chrome extension automates the tedious OTP login process for CLIC MMU (Mult
 ### Method 1: Load Unpacked (Recommended for now)
 
 1. **Download the extension**
-   \`\`\`bash
+   
    git clone https://github.com/sofeamza/otp-extractor.git
    cd clic-mmu-auto-otp
 
@@ -77,9 +77,9 @@ This Chrome extension automates the tedious OTP login process for CLIC MMU (Mult
 ### 🎯 **Automatic Mode (Default)**
 
 1. **Navigate to CLIC MMU login page**
-   \`\`\`
+  
    https://clic.mmu.edu.my/psp/csprd/?cmd=login&languageCd=ENG&
-   \`\`\`
+  
 
 2. **Enter your username and password**
 
@@ -133,7 +133,7 @@ The extension works out of the box, but you can customize:
 ## 🛠️ Development
 
 ### **Project Structure**
-\`\`\`
+
 clic-mmu-auto-otp/
 ├── manifest.json          # Extension configuration
 ├── background.js           # Service worker for automation logic
@@ -143,7 +143,7 @@ clic-mmu-auto-otp/
 ├── popup.js               # Popup functionality
 ├── styles.css             # Styling
 └── icons/                 # Extension icons
-\`\`\`
+
 
 ### **Key Components**
 
@@ -163,14 +163,14 @@ clic-mmu-auto-otp/
 
 ### **Building from Source**
 
-\`\`\`bash
+
 # Clone the repository
 git clone https://github.com/sofeamza/otp-extractor.git
 cd clic-mmu-auto-otp
 
 # No build process needed - load directly in Chrome
 # Go to chrome://extensions/ and load unpacked
-\`\`\`
+
 
 ## 🐛 Troubleshooting
 
