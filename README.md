@@ -55,7 +55,7 @@ This Chrome extension automates the tedious OTP login process for CLIC MMU (Mult
    \`\`\`bash
    git clone https://github.com/sofeamza/otp-extractor.git
    cd clic-mmu-auto-otp
-   \`\`\`
+   \\\
 
 2. **Open Chrome Extensions**
    - Go to `chrome://extensions/`
