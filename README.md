@@ -133,7 +133,7 @@ The extension works out of the box, but you can customize:
 
 ### **Project Structure**
 
-clic-mmu-auto-otp/
+otp-extractor/   
 ├── manifest.json          # Extension configuration  
 ├── background.js           # Service worker for automation logic  
 ├── clic-content.js        # CLIC website integration  
