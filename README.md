@@ -164,8 +164,8 @@ otp-extractor/
 
 
 # Clone the repository
-git clone https://github.com/sofeamza/otp-extractor.git
-cd clic-mmu-auto-otp
+git clone https://github.com/sofeamza/otp-extractor.git  
+cd otp-extractor
 
 # No build process needed - load directly in Chrome
 # Go to chrome://extensions/ and load unpacked
