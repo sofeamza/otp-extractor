@@ -550,7 +550,9 @@ class OutlookOTPExtractor {
     for (const pattern of this.specificPatterns) {
       const match = text.match(pattern)
       if (match && match[1]) {
-        return match[1]
+        const extractedOTP = match[1].trim()
+        console.log("OTP extracted using specific pattern:", extractedOTP)
+        return extractedOTP
       }
     }
 
@@ -575,7 +577,8 @@ class OutlookOTPExtractor {
         if (numbers && numbers.length > 0) {
           const otpCandidates = numbers.filter((num) => num.length >= 4 && num.length <= 8 && !this.isLikelyNotOTP(num))
           if (otpCandidates.length > 0) {
-            return otpCandidates[0]
+            console.log("OTP extracted from OTP line:", otpCandidates[0])
+            return otpCandidates[0].trim()
           }
         }
       }
@@ -587,7 +590,8 @@ class OutlookOTPExtractor {
       // Filter for likely OTP codes (4-8 digits)
       const otpCandidates = allNumbers.filter((num) => num.length >= 4 && num.length <= 8 && !this.isLikelyNotOTP(num))
       if (otpCandidates.length > 0) {
-        return otpCandidates[0]
+        console.log("OTP extracted from all numbers:", otpCandidates[0])
+        return otpCandidates[0].trim()
       }
     }
 
@@ -609,13 +613,20 @@ class OutlookOTPExtractor {
   handleLatestOTPFound(otpData) {
     console.log("LATEST OTP found:", otpData.otp, "at", new Date(otpData.timestamp))
 
+    // Ensure OTP is properly formatted
+    const cleanOTP = String(otpData.otp).trim()
+    console.log("Cleaned OTP:", cleanOTP, "Length:", cleanOTP.length)
+
+    // Log each character for debugging
+    console.log("OTP characters:", Array.from(cleanOTP).join(", "))
+
     const indicator = document.getElementById("otpStatusIndicator")
     if (indicator) {
       if (this.waitingForNewOTP) {
-        indicator.textContent = `✅ New OTP Found: ${otpData.otp}`
+        indicator.textContent = `✅ New OTP Found: ${cleanOTP}`
         indicator.style.background = "#4CAF50"
       } else {
-        indicator.textContent = `✅ Latest OTP: ${otpData.otp}`
+        indicator.textContent = `✅ Latest OTP: ${cleanOTP}`
         indicator.style.background = "#4CAF50"
       }
     }
@@ -623,7 +634,7 @@ class OutlookOTPExtractor {
     window.chrome.runtime.sendMessage(
       {
         action: "otpFound",
-        otp: otpData.otp,
+        otp: cleanOTP,
         context: otpData.content ? otpData.content.substring(0, 200) : "OTP extraction",
         timestamp: Date.now(),
         emailTimestamp: otpData.timestamp,
@@ -631,8 +642,8 @@ class OutlookOTPExtractor {
       (response) => {
         if (response && response.success) {
           const message = this.waitingForNewOTP
-            ? `✅ New OTP found after failure: ${otpData.otp}`
-            : `✅ Latest OTP extracted: ${otpData.otp}`
+            ? `✅ New OTP found after failure: ${cleanOTP}`
+            : `✅ Latest OTP extracted: ${cleanOTP}`
           this.showOTPNotification(message, "success")
         }
       },

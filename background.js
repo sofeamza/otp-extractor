@@ -67,9 +67,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 function handleOTPFound(request, sender) {
   console.log("Auto OTP: OTP found:", request.otp, "Email timestamp:", request.emailTimestamp)
 
+  // Ensure OTP is properly formatted
+  const cleanOTP = String(request.otp).trim()
+  console.log("Auto OTP: Cleaned OTP:", cleanOTP, "Length:", cleanOTP.length)
+  console.log("Auto OTP: OTP characters:", Array.from(cleanOTP).join(", "))
+
   // Check if this OTP has already been used and failed
-  if (otpData.usedCodes.has(request.otp)) {
-    console.log("Auto OTP: Ignoring already used OTP:", request.otp)
+  if (otpData.usedCodes.has(cleanOTP)) {
+    console.log("Auto OTP: Ignoring already used OTP:", cleanOTP)
     return
   }
 
@@ -78,8 +83,8 @@ function handleOTPFound(request, sender) {
 
   // If we're waiting for a new OTP after a failure, ensure this is actually newer
   if (automationState.waitingForNewOTP) {
-    if (automationState.lastFailedOTP === request.otp) {
-      console.log("Auto OTP: Ignoring same failed OTP:", request.otp)
+    if (automationState.lastFailedOTP === cleanOTP) {
+      console.log("Auto OTP: Ignoring same failed OTP:", cleanOTP)
       return
     }
   }
@@ -90,7 +95,7 @@ function handleOTPFound(request, sender) {
 
     // Store OTP with timestamp
     otpData = {
-      code: request.otp,
+      code: cleanOTP,
       timestamp: Date.now(),
       isValid: true,
       emailTimestamp: newEmailTime,
@@ -125,18 +130,19 @@ function handleOTPFound(request, sender) {
               return
             }
 
-            // Multiple attempts to send OTP with increasing delays
-            const sendOTPWithRetry = (attempt = 1, maxAttempts = 5) => {
-              const delay = attempt * 1000 // 1s, 2s, 3s, 4s, 5s
+            // Send OTP with retry mechanism
+            const sendOTPWithRetry = (attempt = 1, maxAttempts = 3) => {
+              const delay = attempt * 1000 // 1s, 2s, 3s
 
               setTimeout(() => {
                 console.log(`Auto OTP: Sending OTP attempt ${attempt}/${maxAttempts}`)
+                console.log(`Auto OTP: Sending OTP: "${cleanOTP}"`)
 
                 chrome.tabs.sendMessage(
                   clicTab.id,
                   {
                     action: "autoFillOTP",
-                    otp: otpData.code,
+                    otp: cleanOTP,
                     isRetry: wasWaitingForNewOTP,
                     attempt: attempt,
                   },
@@ -149,9 +155,7 @@ function handleOTPFound(request, sender) {
                         console.log(`Auto OTP: Retrying... (${attempt + 1}/${maxAttempts})`)
                         sendOTPWithRetry(attempt + 1, maxAttempts)
                       } else {
-                        console.log("Auto OTP: All attempts failed, giving up")
-                        // Try to inject the content script and retry once more
-                        injectContentScriptAndRetry(clicTab.id)
+                        console.log("Auto OTP: All attempts failed")
                       }
                     } else {
                       console.log(`Auto OTP: Successfully sent OTP on attempt ${attempt}`)
@@ -179,7 +183,7 @@ function handleOTPFound(request, sender) {
               setTimeout(() => {
                 chrome.tabs.sendMessage(newTab.id, {
                   action: "autoFillOTP",
-                  otp: otpData.code,
+                  otp: cleanOTP,
                   isRetry: wasWaitingForNewOTP,
                 })
               }, 3000)
@@ -191,33 +195,6 @@ function handleOTPFound(request, sender) {
   } else {
     console.log("Auto OTP: Ignoring older OTP. Current:", otpData.emailTimestamp, "New:", newEmailTime)
   }
-}
-
-function injectContentScriptAndRetry(tabId) {
-  console.log("Auto OTP: Injecting content script and retrying...")
-
-  chrome.scripting.executeScript(
-    {
-      target: { tabId: tabId },
-      files: ["clic-content.js"],
-    },
-    () => {
-      if (chrome.runtime.lastError) {
-        console.log("Error injecting content script:", chrome.runtime.lastError)
-        return
-      }
-
-      // Wait a bit then try sending OTP again
-      setTimeout(() => {
-        chrome.tabs.sendMessage(tabId, {
-          action: "autoFillOTP",
-          otp: otpData.code,
-          isRetry: true,
-          injected: true,
-        })
-      }, 2000)
-    },
-  )
 }
 
 function handleLoginSuccess(request) {
@@ -232,22 +209,22 @@ function handleLoginSuccess(request) {
   otpData = { code: null, timestamp: null, isValid: false, emailTimestamp: null, usedCodes: new Set() }
   chrome.storage.local.remove("otpData")
 
-  console.log("Auto OTP: 🔄 Starting comprehensive Outlook cleanup...")
+  console.log("Auto OTP: 🔄 Silently closing Outlook tabs...")
 
-  // Immediate cleanup attempt
+  // Immediate cleanup attempt - SILENT
   closeAllOutlookTabs()
 
   // Backup cleanup after delay
   setTimeout(() => {
     console.log("Auto OTP: 🔄 Backup cleanup attempt...")
     closeAllOutlookTabs()
-  }, 2000)
+  }, 1000)
 
   // Final cleanup attempt
   setTimeout(() => {
     console.log("Auto OTP: 🔄 Final cleanup attempt...")
     closeAllOutlookTabs()
-  }, 5000)
+  }, 3000)
 
   // Reset automation state
   setTimeout(() => {
@@ -262,7 +239,7 @@ function handleLoginSuccess(request) {
     }
     chrome.storage.local.set({ automationState })
     console.log("Auto OTP: ✅ Automation state reset for next use")
-  }, 3000)
+  }, 2000)
 }
 
 function closeAllOutlookTabs() {
@@ -279,33 +256,31 @@ function closeAllOutlookTabs() {
     automationState.outlookTabId = null
   }
 
-  // Find and close ALL Outlook tabs
+  // Find and close ALL Outlook tabs SILENTLY
   chrome.tabs.query({ url: "https://outlook.office.com/*" }, (tabs) => {
     if (tabs.length > 0) {
-      console.log("Auto OTP: 🗑️ Found", tabs.length, "Outlook tabs to close")
+      console.log("Auto OTP: 🗑️ Silently closing", tabs.length, "Outlook tabs")
 
       tabs.forEach((tab, index) => {
         setTimeout(() => {
-          console.log(`Auto OTP: Closing Outlook tab ${index + 1}/${tabs.length} (ID: ${tab.id})`)
           chrome.tabs.remove(tab.id, () => {
             if (chrome.runtime.lastError) {
               console.log(`❌ Error closing Outlook tab ${tab.id}:`, chrome.runtime.lastError)
             } else {
-              console.log(`✅ Successfully closed Outlook tab ${tab.id}`)
+              console.log(`✅ Silently closed Outlook tab ${tab.id}`)
             }
 
             // Log completion when all tabs are processed
             if (index === tabs.length - 1) {
               setTimeout(() => {
-                console.log("Auto OTP: 🎉 ALL OUTLOOK TABS CLOSED! Automation complete!")
-              }, 500)
+                console.log("Auto OTP: 🎉 ALL OUTLOOK TABS CLOSED SILENTLY!")
+              }, 200)
             }
           })
-        }, index * 300) // 300ms delay between each tab
+        }, index * 200) // 200ms delay between each tab
       })
     } else {
       console.log("Auto OTP: ℹ️ No Outlook tabs found to close")
-      console.log("Auto OTP: 🎉 Automation complete!")
     }
   })
 }
@@ -326,7 +301,7 @@ function forceCloseOutlookTabs() {
               console.log(`Auto OTP: Force closed Outlook tab ${tab.id}`)
             }
           })
-        }, index * 200) // Faster staggering
+        }, index * 100) // Faster staggering
       })
     } else {
       console.log("Auto OTP: No Outlook tabs found to force close")
@@ -335,7 +310,7 @@ function forceCloseOutlookTabs() {
 }
 
 function handleOTPFailure(request, sender) {
-  console.log("Auto OTP: OTP failed:", request.failedOTP)
+  console.log("Auto OTP: OTP failed:", request.failedOTP, "- Fetching latest OTP...")
 
   // Mark this OTP as used and failed
   if (request.failedOTP) {
@@ -350,9 +325,9 @@ function handleOTPFailure(request, sender) {
   // Invalidate current OTP
   otpData.isValid = false
 
-  console.log("Auto OTP: Now waiting for a new OTP code...")
+  console.log("Auto OTP: Now fetching latest OTP code...")
 
-  // Notify Outlook to start scanning for new OTP
+  // Immediately try to get latest OTP from Outlook
   chrome.tabs.query({ url: "https://outlook.office.com/*" }, (tabs) => {
     if (tabs.length > 0) {
       const outlookTab = tabs[0]
@@ -377,7 +352,7 @@ function handleOTPFailure(request, sender) {
         } catch (error) {
           console.log("Could not notify Outlook about failed OTP:", error)
         }
-      }, 1000)
+      }, 500) // Shorter delay for faster retry
     } else {
       // Open Outlook if not already open
       openOutlookForOTP()
@@ -393,8 +368,8 @@ function handleOTPRequest(sender) {
   automationState.waitingForOTP = true
   automationState.clicTabId = sender.tab.id
 
-  // Check if we already have a valid and recent OTP (within last 5 minutes)
-  const isExpired = otpData.timestamp && Date.now() - otpData.timestamp > 300000 // 5 minutes
+  // Check if we already have a valid and recent OTP (within last 3 minutes)
+  const isExpired = otpData.timestamp && Date.now() - otpData.timestamp > 180000 // 3 minutes
   if (otpData.isValid && !isExpired && !otpData.usedCodes.has(otpData.code)) {
     // Use existing OTP
     setTimeout(() => {
@@ -453,7 +428,7 @@ function openOutlookForOTP() {
         } catch (error) {
           console.log("Could not trigger auto scan:", error)
         }
-      }, 2000)
+      }, 1000) // Shorter delay
     } else {
       // Open new Outlook tab
       chrome.tabs.create(
@@ -481,7 +456,7 @@ function openOutlookForOTP() {
             } catch (error) {
               console.log("Could not trigger auto scan on new tab:", error)
             }
-          }, 5000)
+          }, 3000)
         },
       )
     }
