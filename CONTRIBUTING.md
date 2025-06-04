@@ -47,32 +47,24 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 #### Development Setup
 
 1. Fork the repository
-2. Clone your fork:
-   \`\`\`bash
-   git clone https://github.com/sofeamza/otp-extractor.git
-   cd clic-mmu-auto-otp
-   \`\`\`
-3. Load the extension in Chrome:
-   - Go to `chrome://extensions/`
-   - Enable "Developer mode"
-   - Click "Load unpacked" and select the project folder
+2. Clone your fork:  
+   git clone https://github.com/sofeamza/otp-extractor.git  
+   cd clic-mmu-auto-otp  
+3. Load the extension in Chrome:  
+   - Go to `chrome://extensions/`  
+   - Enable "Developer mode"  
+   - Click "Load unpacked" and select the project folder  
 
 #### Making Changes
 
-1. Create a new branch for your feature:
-   \`\`\`bash
-   git checkout -b feature/your-feature-name
-   \`\`\`
-2. Make your changes
+1. Create a new branch for your feature:  
+   git checkout -b feature/your-feature-name  
+2. Make your changes  
 3. Test your changes thoroughly
-4. Commit your changes:
-   \`\`\`bash
-   git commit -m "Add your descriptive commit message"
-   \`\`\`
-5. Push to your fork:
-   \`\`\`bash
-   git push origin feature/your-feature-name
-   \`\`\`
+4. Commit your changes:  
+   git commit -m "Add your descriptive commit message"  
+5. Push to your fork:  
+   git push origin feature/your-feature-name  
 6. Create a Pull Request
 
 ## Style Guidelines
