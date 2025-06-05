@@ -1,30 +1,15 @@
-// Auto CLIC content script with enhanced OTP filling
-
 class AutoClicOTPHelper {
   constructor() {
     this.otpInput = null
     this.loginButton = null
-    this.automationEnabled = true
     this.lastFilledOTP = null
-    this.isMonitoringForFailure = false
-    this.failureCheckTimeout = null
-    this.successCheckInterval = null
-    this.loginStartTime = null
-    this.otpRequestDelay = 3000 // 3 seconds delay before requesting OTP
+    this.manualRequest = false
     this.init()
   }
 
   init() {
     console.log("Auto CLIC OTP Helper: Initializing...")
 
-    // Get automation state
-    chrome.runtime.sendMessage({ action: "getAutomationState" }, (response) => {
-      if (response) {
-        this.automationEnabled = response.isEnabled
-      }
-    })
-
-    // Wait for page to load
     if (document.readyState === "loading") {
       document.addEventListener("DOMContentLoaded", () => this.setupHelper())
     } else {
@@ -34,13 +19,8 @@ class AutoClicOTPHelper {
     // Listen for messages from background script
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       if (request.action === "autoFillOTP") {
-        console.log("RECEIVED OTP MESSAGE:", request.otp)
-        this.autoFillAndLogin(request.otp, request.isRetry)
+        this.autoFillAndLogin(request.otp)
         sendResponse({ success: true })
-        return true
-      } else if (request.action === "checkLoginStatus") {
-        const status = this.checkLoginSuccess()
-        sendResponse({ success: status.success, redirected: status.redirected })
         return true
       }
     })
@@ -53,10 +33,10 @@ class AutoClicOTPHelper {
     this.findOTPInput()
     this.findLoginButton()
 
-    console.log("Found OTP input:", !!this.otpInput)
-    console.log("Found login button:", !!this.loginButton)
+    console.log("🎯 Found OTP input:", !!this.otpInput)
+    console.log("🎯 Found login button:", !!this.loginButton)
 
-    if (this.otpInput && this.automationEnabled) {
+    if (this.otpInput) {
       // Auto-detect when OTP input becomes visible/required
       this.monitorOTPInput()
 
@@ -66,9 +46,6 @@ class AutoClicOTPHelper {
 
     // Monitor for dynamic content changes
     this.observePageChanges()
-
-    // Monitor for login failures
-    this.setupFailureDetection()
 
     // Check if we're already on a post-login page
     this.checkInitialLoginState()
@@ -106,21 +83,21 @@ class AutoClicOTPHelper {
           }
         : "Not found"
 
-      debugDiv.innerHTML = `
-        <div><strong>CLIC OTP Debug</strong></div>
-        <div>URL: ${window.location.href}</div>
-        <div>OTP Input: ${JSON.stringify(otpInputInfo, null, 2)}</div>
-        <div>Login Button: ${this.loginButton ? "Found" : "Not found"}</div>
-        <div>Last OTP: ${this.lastFilledOTP || "None"}</div>
-      `
-    }
+    debugDiv.innerHTML = `
+      <div><strong>CLIC OTP Debug</strong></div>
+      <div>URL: ${window.location.href}</div>
+      <div>OTP Input: ${JSON.stringify(otpInputInfo, null, 2)}</div>
+      <div>Login Button: ${this.loginButton ? "Found" : "Not found"}</div>
+      <div>Last OTP: ${this.lastFilledOTP || "None"}</div>
+    `;
+  };
 
-    updateDebugInfo()
-    setInterval(updateDebugInfo, 2000)
+  updateDebugInfo();
+  setInterval(updateDebugInfo, 2000);
 
-    document.body.appendChild(debugDiv)
-      debugDiv.style.display = "none"
-  }
+  document.body.appendChild(debugDiv);
+  debugDiv.style.display = "none"; 
+}
 
   checkInitialLoginState() {
     // If we're already on what looks like a post-login page
@@ -137,17 +114,14 @@ class AutoClicOTPHelper {
       '[aria-label*="user" i], [class*="user" i], [id*="user" i], [class*="account" i], [id*="account" i]',
     )
     const noLoginForm = !document.querySelector('form[action*="login" i], form[action*="auth" i]')
-    Array.from(document.querySelectorAll('a[href*="logout" i], button')).find(el =>
-      /logout|sign out/i.test(el.textContent)
+    const logoutLinks = Array.from(document.querySelectorAll('a[href*="logout" i], button'))
+    const hasLogoutButton = logoutLinks.some(el =>
+      /logout|sign out/i.test(el.textContent.trim())
     )
+
     const hasDashboard = !!document.querySelector(
       '[class*="dashboard" i], [id*="dashboard" i], [class*="home" i], [id*="home" i]',
     )
-
-    const hasLogoutButton = !!Array.from(document.querySelectorAll('a[href*="logout" i], button')).find(el =>
-        /logout|sign out/i.test(el.textContent)
-      )
-
 
     // If several indicators suggest we're logged in
     return (
@@ -184,8 +158,6 @@ class AutoClicOTPHelper {
   }
 
   checkForLoginFailure() {
-    if (!this.isMonitoringForFailure || !this.lastFilledOTP) return
-
     // Look for error messages
     const errorSelectors = [
       ".error",
@@ -225,27 +197,13 @@ class AutoClicOTPHelper {
     const stillOnLoginPage =
       window.location.href.includes("login") || document.querySelector('input[type="password"]') || this.otpInput
 
-    if (
-      foundError ||
-      (otpStillVisible && stillOnLoginPage && this.loginStartTime && Date.now() - this.loginStartTime > 8000)
-    ) {
+    if (foundError || (otpStillVisible && stillOnLoginPage)) {
       console.log("Auto CLIC: Login failure detected for OTP:", this.lastFilledOTP)
       this.handleLoginFailure()
     }
   }
 
   checkLoginSuccess() {
-    // If we're not monitoring for login status
-    if (!this.loginStartTime) {
-      return { success: false, redirected: false }
-    }
-
-    // Check if enough time has passed since login attempt
-    const timeSinceLogin = Date.now() - this.loginStartTime
-    if (timeSinceLogin < 2000) {
-      return { success: false, redirected: false }
-    }
-
     // Check for URL change indicating success
     const notOnLoginPage = !window.location.href.includes("login") && !window.location.href.includes("signin")
 
@@ -266,7 +224,7 @@ class AutoClicOTPHelper {
     const success =
       (notOnLoginPage && (hasUserMenu || hasLogoutButton || hasDashboard || noLoginForm)) ||
       hasLogoutButton ||
-      (notOnLoginPage && noOtpInput && timeSinceLogin > 3000) // Give more time for page to load
+      (notOnLoginPage && noOtpInput) // Give more time for page to load
 
     if (success) {
       console.log("Auto CLIC: Login success detected!")
@@ -278,20 +236,6 @@ class AutoClicOTPHelper {
   }
 
   notifyLoginSuccess() {
-    // Clear monitoring state
-    this.isMonitoringForFailure = false
-    this.loginStartTime = null
-
-    if (this.successCheckInterval) {
-      clearInterval(this.successCheckInterval)
-      this.successCheckInterval = null
-    }
-
-    if (this.failureCheckTimeout) {
-      clearTimeout(this.failureCheckTimeout)
-      this.failureCheckTimeout = null
-    }
-
     console.log("Auto CLIC: Login success detected, notifying background script...")
 
     // Immediately notify background script about successful login - NO SUCCESS MESSAGES
@@ -339,20 +283,6 @@ class AutoClicOTPHelper {
   handleLoginFailure() {
     if (!this.lastFilledOTP) return
 
-    this.isMonitoringForFailure = false
-    this.loginStartTime = null
-
-    // Clear monitoring intervals
-    if (this.successCheckInterval) {
-      clearInterval(this.successCheckInterval)
-      this.successCheckInterval = null
-    }
-
-    // Clear the failed OTP from input
-    if (this.otpInput) {
-      this.otpInput.value = ""
-    }
-
     console.log(`Auto CLIC: OTP ${this.lastFilledOTP} failed. Fetching latest OTP...`)
 
     // Notify background script about the failure
@@ -389,7 +319,7 @@ class AutoClicOTPHelper {
       max-width: 400px;
     `
     waitingMessage.innerHTML = `
-      <div>Fetching Latest OTP</div>
+      <div>⏳ Fetching Latest OTP</div>
       <div style="font-size: 14px; margin-top: 8px; opacity: 0.9;">
         Previous OTP failed. Getting fresh code from Outlook...
       </div>
@@ -420,13 +350,13 @@ class AutoClicOTPHelper {
 
     // Try CLIC-specific selectors first
     for (const selector of clicSelectors) {
-      console.log("Trying CLIC selector:", selector)
+      console.log("🔍 Trying CLIC selector:", selector)
       const inputs = document.querySelectorAll(selector)
       for (const input of inputs) {
-        console.log("Found potential CLIC input:", input)
+        console.log("🎯 Found potential CLIC input:", input)
         if (this.isVisible(input)) {
           this.otpInput = input
-          console.log("Found CLIC OTP input field:", input)
+          console.log("✅ Found CLIC OTP input field:", input)
           return
         }
       }
@@ -449,25 +379,25 @@ class AutoClicOTPHelper {
     ]
 
     for (const selector of generalSelectors) {
-      console.log("Trying general selector:", selector)
+      console.log("🔍 Trying general selector:", selector)
       const inputs = document.querySelectorAll(selector)
       for (const input of inputs) {
-        console.log("Found potential input:", input)
+        console.log("🎯 Found potential input:", input)
         if (this.isVisible(input)) {
           this.otpInput = input
-          console.log("Found OTP input field:", input)
+          console.log("✅ Found OTP input field:", input)
           return
         }
       }
     }
 
     // If still not found, try a more aggressive approach
-    console.log("Trying aggressive search...")
+    console.log("🔍 Trying aggressive search...")
     const allInputs = document.querySelectorAll('input[type="text"], input[type="password"], input[type="number"]')
-    console.log("Found", allInputs.length, "total inputs")
+    console.log("🔍 Found", allInputs.length, "total inputs")
 
     for (const input of allInputs) {
-      console.log("Checking input:", {
+      console.log("🔍 Checking input:", {
         name: input.name,
         id: input.id,
         placeholder: input.placeholder,
@@ -489,11 +419,11 @@ class AutoClicOTPHelper {
       }
     }
 
-    console.log("No OTP input field found")
+    console.log("❌ No OTP input field found")
   }
 
   findLoginButton() {
-    console.log("Searching for login button...")
+    console.log("🔍 Searching for login button...")
 
     const selectors = [
       'button[type="submit"]',
@@ -511,10 +441,10 @@ class AutoClicOTPHelper {
 
     for (const selector of selectors) {
       try {
-        console.log("Trying button selector:", selector)
+        console.log("🔍 Trying button selector:", selector)
         const buttons = document.querySelectorAll(selector)
         for (const button of buttons) {
-          console.log("Found potential button:", button)
+          console.log("🎯 Found potential button:", button)
           if (this.isVisible(button)) {
             this.loginButton = button
             console.log("✅ Found login button:", button)
@@ -528,7 +458,7 @@ class AutoClicOTPHelper {
 
     // If no specific button found, look for any submit button near the OTP input
     if (!this.loginButton && this.otpInput) {
-      console.log("Looking for submit button in form...")
+      console.log("🔍 Looking for submit button in form...")
       const form = this.otpInput.closest("form")
       if (form) {
         const submitBtn = form.querySelector('button[type="submit"], input[type="submit"]')
@@ -540,7 +470,7 @@ class AutoClicOTPHelper {
 
       // Look for buttons near the input
       if (!this.loginButton) {
-        console.log("Looking for nearby buttons...")
+        console.log("🔍 Looking for nearby buttons...")
         const parent = this.otpInput.parentElement
         if (parent) {
           const nearbyButtons = parent.querySelectorAll("button")
@@ -556,7 +486,7 @@ class AutoClicOTPHelper {
     }
 
     if (!this.loginButton) {
-      console.log("No login button found")
+      console.log("❌ No login button found")
     }
   }
 
@@ -581,7 +511,8 @@ class AutoClicOTPHelper {
     fillButton.addEventListener("click", (e) => {
       e.preventDefault()
       console.log("🔥 Manual fill button clicked!")
-      this.requestLatestOTP()
+      this.manualRequest = true // Mark as manual request
+      chrome.runtime.sendMessage({ action: "needOTP", manual: true })
     })
 
     // Insert button next to the input field
@@ -593,7 +524,7 @@ class AutoClicOTPHelper {
   monitorOTPInput() {
     if (!this.otpInput) return
 
-    console.log("Monitoring OTP input...")
+    console.log("👀 Monitoring OTP input...")
 
     // Check if OTP input is focused or becomes visible
     const observer = new MutationObserver(() => {
@@ -610,7 +541,7 @@ class AutoClicOTPHelper {
 
     // Also check when input gets focus
     this.otpInput.addEventListener("focus", () => {
-      console.log("OTP input focused!")
+      console.log("🎯 OTP input focused!")
       if (!this.otpInput.value) {
         this.requestOTPAutomatically()
       }
@@ -623,9 +554,7 @@ class AutoClicOTPHelper {
   }
 
   requestOTPAutomatically() {
-    if (!this.automationEnabled) return
-
-    console.log("Auto-requesting OTP with 3-second delay...")
+    console.log("🤖 Auto-requesting OTP with 3-second delay...")
 
     // Show countdown message
     this.showCountdownMessage()
@@ -634,7 +563,7 @@ class AutoClicOTPHelper {
     setTimeout(() => {
       console.log("⏰ 3-second delay completed, requesting OTP...")
       chrome.runtime.sendMessage({ action: "needOTP" })
-    }, this.otpRequestDelay)
+    }, 3000)
   }
 
   showCountdownMessage() {
@@ -676,411 +605,71 @@ class AutoClicOTPHelper {
     }, 1000)
   }
 
-  requestLatestOTP() {
-    console.log("👆 Manually requesting latest OTP...")
-    chrome.runtime.sendMessage({ action: "needOTP" })
+  autoFillAndLogin(otp) {
+    console.log("🔥 AUTO-FILLING OTP:", otp)
+
+    // If manual request, focus this tab first
+    if (this.manualRequest) {
+      this.manualRequest = false
+      window.focus()
+      setTimeout(() => this.fillOTP(otp), 500)
+    } else {
+      this.fillOTP(otp)
+    }
   }
 
-  autoFillAndLogin(otp, isRetry = false) {
-    console.log("AUTO-FILLING OTP:", otp, "Is retry:", isRetry)
-
-    // Remove waiting message if it exists
-    const waitingMessage = document.getElementById("waitingForNewOTP")
-    if (waitingMessage) {
-      waitingMessage.remove()
-    }
-
-    // Force re-scan for elements
-    console.log("Re-scanning for elements...")
-    this.findOTPInput()
-    this.findLoginButton()
-
-    // Debug: Log what we found
-    console.log("OTP Input found:", !!this.otpInput, this.otpInput)
-    console.log("Login Button found:", !!this.loginButton, this.loginButton)
-
+  fillOTP(otp) {
     if (!this.otpInput) {
-      console.log("❌ NO OTP INPUT FOUND! Trying aggressive search...")
-      this.findOTPInputAggressive()
+      this.findOTPInput()
     }
 
     if (this.otpInput) {
-      console.log("✅ OTP input available, proceeding with fill...")
-
-      // Ensure the input is visible and interactable
-      if (!this.isVisible(this.otpInput)) {
-        console.log("⚠️ OTP input not visible, trying to make it visible...")
-
-        // Try to scroll to the input
-        this.otpInput.scrollIntoView({ behavior: "smooth", block: "center" })
-
-        // Try to show parent elements
-        let parent = this.otpInput.parentElement
-        while (parent && parent !== document.body) {
-          if (parent.style.display === "none") {
-            parent.style.display = "block"
-          }
-          if (parent.style.visibility === "hidden") {
-            parent.style.visibility = "visible"
-          }
-          parent = parent.parentElement
-        }
-
-        // Wait a bit for visibility changes to take effect
-        setTimeout(() => this.fillOTPInput(otp, isRetry), 500)
-        return
-      }
-
-      this.fillOTPInput(otp, isRetry)
-    } else {
-      console.log("❌ CRITICAL: No OTP input field found after all attempts!")
-      this.showDebugInfo()
-    }
-  }
-
-  fillOTPInput(otp, isRetry) {
-    console.log("FILLING OTP INPUT WITH:", otp)
-
-    // Verify OTP is a valid string before proceeding
-    if (!otp || typeof otp !== "string") {
-      console.error("❌ Invalid OTP received:", otp)
-      return
-    }
-
-    // Log each character of the OTP for debugging
-    console.log("🔍 OTP characters:", Array.from(otp).join(", "))
-
-    // Highlight the input field
-    this.otpInput.style.border = "3px solid red"
-    this.otpInput.style.backgroundColor = "yellow"
-
-    // Clear any existing value first
-    this.otpInput.value = ""
-
-    // Force focus to ensure the input is active
-    this.otpInput.focus()
-    console.log("🎯 Input focused")
-
-    // Wait a moment for focus to take effect
-    setTimeout(() => {
-      console.log("🔥 Setting OTP value...")
-
-      // DIRECT STRING ASSIGNMENT - most reliable method
-      // Convert to string explicitly to ensure proper handling
-      const otpString = String(otp).trim()
-      this.otpInput.value = otpString
-      console.log("✅ Direct value set to:", this.otpInput.value)
-
-      // Trigger ALL possible events
-      const events = [
-        new Event("input", { bubbles: true }),
-        new Event("change", { bubbles: true }),
-        new Event("keyup", { bubbles: true }),
-        new InputEvent("input", { bubbles: true, inputType: "insertText", data: otpString }),
-      ]
-
-      events.forEach((event, index) => {
-        this.otpInput.dispatchEvent(event)
-        console.log(`✅ Event ${index + 1} dispatched:`, event.type)
-      })
-
-      // Store the last filled OTP
-      this.lastFilledOTP = otpString
-
-      // Verify the value was set
-      setTimeout(() => {
-        console.log("🔍 Verifying OTP was set...")
-        console.log("Expected:", otpString)
-        console.log("Actual:", this.otpInput.value)
-
-        if (this.otpInput.value === otpString) {
-          console.log("✅ OTP SUCCESSFULLY FILLED AND VERIFIED!")
-
-          // Remove highlighting
-          this.otpInput.style.border = ""
-          this.otpInput.style.backgroundColor = ""
-
-          // Proceed with login immediately - no success messages
-          this.proceedWithLogin(isRetry)
-        } else {
-          console.log("❌ OTP FILLING FAILED - value not set correctly")
-          console.log(`Expected: "${otpString}", Got: "${this.otpInput.value}"`)
-
-          // Try alternative filling method
-          this.tryAlternativeFilling(otpString, isRetry)
-        }
-      }, 1000) // Longer delay for verification
-    }, 500) // Longer delay for focus
-  }
-
-  tryAlternativeFilling(otp, isRetry) {
-    console.log("🔄 Trying alternative OTP filling method...")
-    console.log("🔍 OTP to fill character by character:", otp)
-
-    // Ensure otp is a string
-    const otpString = String(otp).trim()
-
-    // Try typing character by character
-    this.otpInput.focus()
-    this.otpInput.value = ""
-
-    // Use a more reliable character-by-character approach
-    const fillCharByChar = () => {
-      // Clear the input first
+      // Clear and fill OTP
       this.otpInput.value = ""
+      this.otpInput.focus()
 
-      // Log the characters we're about to type
-      console.log("⌨️ Will type these characters:", Array.from(otpString).join(", "))
+      setTimeout(() => {
+        this.otpInput.value = String(otp).trim()
 
-      // Type each character with a delay between them
-      let currentValue = ""
+        // Trigger events
+        this.otpInput.dispatchEvent(new Event("input", { bubbles: true }))
+        this.otpInput.dispatchEvent(new Event("change", { bubbles: true }))
 
-      for (let i = 0; i < otpString.length; i++) {
-        setTimeout(() => {
-          const char = otpString[i]
-          currentValue += char
-          console.log(`⌨️ Typing character ${i + 1}: '${char}', Current value: '${currentValue}'`)
+        this.lastFilledOTP = otp
 
-          // Set the value directly for this character
-          this.otpInput.value = currentValue
-
-          // Dispatch events
-          this.otpInput.dispatchEvent(new Event("input", { bubbles: true }))
-
-          // If this is the last character, verify and proceed
-          if (i === otpString.length - 1) {
-            setTimeout(() => {
-              console.log("⌨️ Finished typing all characters")
-              console.log("Expected:", otpString)
-              console.log("Actual:", this.otpInput.value)
-
-              if (this.otpInput.value === otpString) {
-                console.log("✅ Alternative filling successful!")
-                this.proceedWithLogin(isRetry)
-              } else {
-                console.log("❌ Alternative filling also failed")
-                console.log(`Expected: "${otpString}", Got: "${this.otpInput.value}"`)
-
-                // Last resort: try clipboard method
-                this.tryClipboardMethod(otpString, isRetry)
-              }
-            }, 500)
-          }
-        }, i * 200) // 200ms delay between characters
-      }
-    }
-
-    // Execute the character-by-character filling
-    fillCharByChar()
-  }
-
-  tryClipboardMethod(otp, isRetry) {
-    console.log("🔄 Trying clipboard method as last resort...")
-
-    // Create a visible input field for the user
-    const helpDiv = document.createElement("div")
-    helpDiv.style.cssText = `
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: rgba(0,0,0,0.8);
-      color: white;
-      padding: 20px;
-      border-radius: 8px;
-      z-index: 10000;
-      text-align: center;
-      max-width: 400px;
-    `
-
-    helpDiv.innerHTML = `
-      <h3>OTP Auto-Fill Issue</h3>
-      <p>We're having trouble automatically filling the OTP.</p>
-      <p>Your OTP code is: <strong style="font-size: 24px; color: #4CAF50;">${otp}</strong></p>
-      <p>Please copy this code and paste it manually, or click the button below:</p>
-      <button id="manualFillBtn" style="padding: 10px 20px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Fill OTP for me</button>
-      <p style="font-size: 12px; margin-top: 10px;">Click anywhere outside this box to dismiss</p>
-    `
-
-    document.body.appendChild(helpDiv)
-
-    // Add click handler for the manual fill button
-    document.getElementById("manualFillBtn").addEventListener("click", () => {
-      this.otpInput.value = otp
-      this.otpInput.dispatchEvent(new Event("input", { bubbles: true }))
-      this.otpInput.dispatchEvent(new Event("change", { bubbles: true }))
-      helpDiv.remove()
-      this.lastFilledOTP = otp
-      this.proceedWithLogin(isRetry)
-    })
-
-    // Close when clicking outside
-    helpDiv.addEventListener("click", (e) => {
-      if (e.target === helpDiv) {
-        helpDiv.remove()
-      }
-    })
-
-    // Also try to use the clipboard API if available
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard
-        .writeText(otp)
-        .then(() => {
-          console.log("✅ OTP copied to clipboard for easy pasting")
-        })
-        .catch((err) => {
-          console.error("❌ Could not copy to clipboard:", err)
-        })
-    }
-  }
-
-  proceedWithLogin(isRetry) {
-    console.log("Proceeding with login...")
-
-    // Auto-click login button after a short delay
-    if (this.loginButton) {
-      chrome.runtime.sendMessage({ action: "getAutomationState" }, (response) => {
-        if (response && response.autoLoginEnabled) {
-          console.log("Auto-clicking login button...")
-
-          // Highlight the button
-          this.loginButton.style.border = "3px solid green"
-
-          // Set login start time to track success/failure
-          this.loginStartTime = Date.now()
-
-          // Click the login button immediately
-          this.loginButton.click()
-          console.log("Login button clicked!")
-
-          // Start monitoring for failure
-          this.isMonitoringForFailure = true
-
-          // Set a timeout to check for failure
-          this.failureCheckTimeout = setTimeout(() => {
-            this.checkForLoginFailure()
-          }, 8000) // Check after 8 seconds
-
-          // Start interval to check for success
-          this.successCheckInterval = setInterval(() => {
-            const status = this.checkLoginSuccess()
-
-            // If we've been checking for too long without success or failure
-            if (Date.now() - this.loginStartTime > 30000) {
-              // 30 seconds timeout
-              clearInterval(this.successCheckInterval)
-              this.successCheckInterval = null
-            }
-          }, 1000) // Check every second
+        // Auto-click login button
+        if (this.loginButton) {
+          setTimeout(() => {
+            this.loginButton.click()
+            this.checkLoginSuccess()
+          }, 1000)
         }
-      })
-    } else {
-      console.log("❌ No login button found")
+      }, 500)
     }
   }
 
-  findOTPInputAggressive() {
-    console.log("🔍 AGGRESSIVE OTP INPUT SEARCH...")
+  checkLoginSuccess() {
+    // Check for login success after 5 seconds
+    setTimeout(() => {
+      const notOnLoginPage = !window.location.href.includes("login")
+      const noOtpInput = !this.otpInput || !this.isVisible(this.otpInput)
 
-    // Try all possible input elements
-    const allInputs = document.querySelectorAll("input")
-    console.log("🔍 Found", allInputs.length, "total input elements")
-
-    for (let i = 0; i < allInputs.length; i++) {
-      const input = allInputs[i]
-      const inputInfo = {
-        index: i,
-        type: input.type,
-        name: input.name,
-        id: input.id,
-        placeholder: input.placeholder,
-        maxLength: input.maxLength,
-        className: input.className,
-        visible: this.isVisible(input),
-        value: input.value,
+      if (notOnLoginPage || noOtpInput) {
+        console.log("✅ Login success detected")
+        chrome.runtime.sendMessage({
+          action: "loginSuccess",
+          otp: this.lastFilledOTP,
+        })
       }
-
-      console.log("🔍 Input", i, ":", inputInfo)
-
-      // Check if this could be an OTP input
-      if (this.couldBeOTPInput(input)) {
-        console.log("🎯 This input could be OTP input!")
-        this.otpInput = input
-        return
-      }
-    }
-
-    console.log("❌ No suitable OTP input found in aggressive search")
-  }
-
-  couldBeOTPInput(input) {
-    if (!input) return false
-
-    const text = (input.name + " " + input.id + " " + input.placeholder + " " + input.className).toLowerCase()
-
-    // Check for OTP-related keywords
-    const otpKeywords = ["otp", "code", "verification", "auth", "token", "pin", "2fa", "ver_nbr"]
-    const hasOTPKeyword = otpKeywords.some((keyword) => text.includes(keyword))
-
-    // Check input characteristics
-    const isTextOrPassword = input.type === "text" || input.type === "password" || input.type === "number"
-    const hasReasonableLength = !input.maxLength || (input.maxLength >= 4 && input.maxLength <= 10)
-    const isVisible = this.isVisible(input)
-
-    const couldBe = (hasOTPKeyword || hasReasonableLength) && isTextOrPassword && isVisible
-
-    if (couldBe) {
-      console.log("🎯 Potential OTP input found:", {
-        hasOTPKeyword,
-        hasReasonableLength,
-        isTextOrPassword,
-        isVisible,
-        text,
-      })
-    }
-
-    return couldBe
-  }
-
-  showDebugInfo() {
-    console.log("🐞 === CLIC DEBUG INFO ===")
-    console.log("Current URL:", window.location.href)
-    console.log("Page title:", document.title)
-    console.log("All inputs:", document.querySelectorAll("input").length)
-    console.log("All buttons:", document.querySelectorAll("button").length)
-    console.log("All forms:", document.querySelectorAll("form").length)
-
-    // Log all inputs with details
-    const allInputs = document.querySelectorAll("input")
-    allInputs.forEach((input, index) => {
-      console.log(`Input ${index}:`, {
-        type: input.type,
-        name: input.name,
-        id: input.id,
-        placeholder: input.placeholder,
-        maxLength: input.maxLength,
-        className: input.className,
-        visible: this.isVisible(input),
-      })
-    })
+    }, 5000)
   }
 
   isVisible(element) {
     if (!element) return false
-
-    try {
-      const style = window.getComputedStyle(element)
-      const isVisible =
-        style.display !== "none" &&
-        style.visibility !== "hidden" &&
-        style.opacity !== "0" &&
-        element.offsetWidth > 0 &&
-        element.offsetHeight > 0
-
-      return isVisible
-    } catch (e) {
-      return false
-    }
+    const style = window.getComputedStyle(element)
+    return (
+      style.display !== "none" && style.visibility !== "hidden" && element.offsetWidth > 0 && element.offsetHeight > 0
+    )
   }
 
   observePageChanges() {
@@ -1104,9 +693,7 @@ class AutoClicOTPHelper {
       }
 
       // Check for login success on significant DOM changes
-      if (this.loginStartTime) {
-        this.checkLoginSuccess()
-      }
+      this.checkLoginSuccess()
     })
 
     observer.observe(document.body, {

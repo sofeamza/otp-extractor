@@ -3,8 +3,6 @@ let otpData = {
   code: null,
   timestamp: null,
   isValid: false,
-  emailTimestamp: null,
-  usedCodes: new Set(), // Track used OTP codes
 }
 
 let automationState = {
@@ -12,42 +10,31 @@ let automationState = {
   outlookTabId: null,
   clicTabId: null,
   waitingForOTP: false,
-  waitingForNewOTP: false, // New state for waiting for fresh OTP
-  autoLoginEnabled: true,
-  lastFailedOTP: null,
 }
 
 // Listen for messages from content scripts
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "otpFound") {
     handleOTPFound(request, sender)
-    sendResponse({ success: true })
-    return true
   } else if (request.action === "getOTP") {
     const isExpired = otpData.timestamp && Date.now() - otpData.timestamp > 600000
     if (otpData.isValid && !isExpired) {
-      sendResponse({ otp: otpData.code, valid: true, emailTimestamp: otpData.emailTimestamp })
+      sendResponse({ otp: otpData.code, valid: true })
     } else {
       sendResponse({ otp: null, valid: false })
     }
     return true
   } else if (request.action === "clearOTP") {
-    otpData = { code: null, timestamp: null, isValid: false, emailTimestamp: null, usedCodes: new Set() }
+    otpData = { code: null, timestamp: null, isValid: false }
     chrome.storage.local.remove("otpData")
     sendResponse({ success: true })
     return true
   } else if (request.action === "needOTP") {
-    handleOTPRequest(sender)
-    sendResponse({ success: true })
-    return true
+    handleOTPRequest(sender, request.manual)
   } else if (request.action === "otpFailed") {
     handleOTPFailure(request, sender)
-    sendResponse({ success: true })
-    return true
   } else if (request.action === "loginSuccess") {
-    handleLoginSuccess(request)
-    sendResponse({ success: true })
-    return true
+    handleLoginSuccess()
   } else if (request.action === "getAutomationState") {
     sendResponse(automationState)
     return true
@@ -62,265 +49,119 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ success: true })
     return true
   }
+
+  sendResponse({ success: true })
 })
 
 function handleOTPFound(request, sender) {
-  console.log("Auto OTP: OTP found:", request.otp, "Email timestamp:", request.emailTimestamp)
+  console.log("Auto OTP: OTP found:", request.otp)
 
-  // Ensure OTP is properly formatted
   const cleanOTP = String(request.otp).trim()
-  console.log("Auto OTP: Cleaned OTP:", cleanOTP, "Length:", cleanOTP.length)
-  console.log("Auto OTP: OTP characters:", Array.from(cleanOTP).join(", "))
 
-  // Check if this OTP has already been used and failed
-  if (otpData.usedCodes.has(cleanOTP)) {
-    console.log("Auto OTP: Ignoring already used OTP:", cleanOTP)
-    return
+  // Store OTP
+  otpData = {
+    code: cleanOTP,
+    timestamp: Date.now(),
+    isValid: true,
   }
 
-  // Only update if this is a newer OTP (based on email timestamp)
-  const newEmailTime = request.emailTimestamp || Date.now()
+  // If waiting for OTP, send it to CLIC
+  if (automationState.waitingForOTP) {
+    automationState.waitingForOTP = false
 
-  // If we're waiting for a new OTP after a failure, ensure this is actually newer
-  if (automationState.waitingForNewOTP) {
-    if (automationState.lastFailedOTP === cleanOTP) {
-      console.log("Auto OTP: Ignoring same failed OTP:", cleanOTP)
-      return
-    }
-  }
+    chrome.tabs.query({ url: "https://clic.mmu.edu.my/*" }, (tabs) => {
+      if (tabs.length > 0) {
+        const clicTab = tabs[0]
 
-  // Always update if we don't have an OTP yet, or if this is newer, or if we're waiting for a new one
-  if (!otpData.emailTimestamp || newEmailTime > otpData.emailTimestamp || automationState.waitingForNewOTP) {
-    console.log("Auto OTP: This is a fresh OTP, updating...")
+        // Check if tab is still valid
+        chrome.tabs.get(clicTab.id, (tab) => {
+          if (chrome.runtime.lastError) {
+            console.log("CLIC tab no longer exists, skipping OTP send")
+            return
+          }
 
-    // Store OTP with timestamp
-    otpData = {
-      code: cleanOTP,
-      timestamp: Date.now(),
-      isValid: true,
-      emailTimestamp: newEmailTime,
-      usedCodes: otpData.usedCodes, // Preserve used codes
-    }
-
-    chrome.storage.local.set({ otpData })
-
-    // Reset waiting states
-    const wasWaitingForNewOTP = automationState.waitingForNewOTP
-    automationState.waitingForNewOTP = false
-    automationState.lastFailedOTP = null
-
-    // If we're waiting for OTP and automation is enabled, fill it automatically
-    if ((automationState.waitingForOTP || wasWaitingForNewOTP) && automationState.isEnabled) {
-      automationState.waitingForOTP = false
-
-      console.log("Auto OTP: Attempting to fill OTP in CLIC...")
-
-      // Find CLIC tab and fill OTP
-      chrome.tabs.query({ url: "https://clic.mmu.edu.my/*" }, (tabs) => {
-        if (tabs.length > 0) {
-          const clicTab = tabs[0]
-          automationState.clicTabId = clicTab.id
-
-          console.log("Auto OTP: Found CLIC tab, switching to it...")
-
-          // Switch to CLIC tab first
+          // Switch to CLIC tab and send OTP
           chrome.tabs.update(clicTab.id, { active: true }, () => {
             if (chrome.runtime.lastError) {
               console.log("Error switching to CLIC tab:", chrome.runtime.lastError)
               return
             }
 
-            // Send OTP with retry mechanism
-            const sendOTPWithRetry = (attempt = 1, maxAttempts = 3) => {
-              const delay = attempt * 1000 // 1s, 2s, 3s
-
-              setTimeout(() => {
-                console.log(`Auto OTP: Sending OTP attempt ${attempt}/${maxAttempts}`)
-                console.log(`Auto OTP: Sending OTP: "${cleanOTP}"`)
-
-                chrome.tabs.sendMessage(
-                  clicTab.id,
-                  {
-                    action: "autoFillOTP",
-                    otp: cleanOTP,
-                    isRetry: wasWaitingForNewOTP,
-                    attempt: attempt,
-                  },
-                  (response) => {
-                    if (chrome.runtime.lastError) {
-                      console.log(`Auto OTP: Error on attempt ${attempt}:`, chrome.runtime.lastError)
-
-                      // Try again if we haven't reached max attempts
-                      if (attempt < maxAttempts) {
-                        console.log(`Auto OTP: Retrying... (${attempt + 1}/${maxAttempts})`)
-                        sendOTPWithRetry(attempt + 1, maxAttempts)
-                      } else {
-                        console.log("Auto OTP: All attempts failed")
-                      }
-                    } else {
-                      console.log(`Auto OTP: Successfully sent OTP on attempt ${attempt}`)
-                    }
-                  },
-                )
-              }, delay)
-            }
-
-            // Start the retry sequence
-            sendOTPWithRetry()
-          })
-        } else {
-          console.log("Auto OTP: No CLIC tab found")
-          // Try to open CLIC if no tab exists
-          chrome.tabs.create(
-            {
-              url: "https://clic.mmu.edu.my/psp/csprd/?cmd=login&languageCd=ENG&",
-              active: true,
-            },
-            (newTab) => {
-              automationState.clicTabId = newTab.id
-
-              // Wait for the new tab to load then send OTP
-              setTimeout(() => {
-                chrome.tabs.sendMessage(newTab.id, {
+            setTimeout(() => {
+              chrome.tabs.sendMessage(
+                clicTab.id,
+                {
                   action: "autoFillOTP",
                   otp: cleanOTP,
-                  isRetry: wasWaitingForNewOTP,
-                })
-              }, 3000)
-            },
-          )
-        }
-      })
-    }
-  } else {
-    console.log("Auto OTP: Ignoring older OTP. Current:", otpData.emailTimestamp, "New:", newEmailTime)
-  }
-}
-
-function handleLoginSuccess(request) {
-  console.log("Auto OTP: ✅ LOGIN SUCCESS! OTP:", request.otp)
-
-  // Clear waiting states immediately
-  automationState.waitingForOTP = false
-  automationState.waitingForNewOTP = false
-  automationState.lastFailedOTP = null
-
-  // Clear OTP data
-  otpData = { code: null, timestamp: null, isValid: false, emailTimestamp: null, usedCodes: new Set() }
-  chrome.storage.local.remove("otpData")
-
-  console.log("Auto OTP: 🔄 Silently closing Outlook tabs...")
-
-  // Immediate cleanup attempt - SILENT
-  closeAllOutlookTabs()
-
-  // Backup cleanup after delay
-  setTimeout(() => {
-    console.log("Auto OTP: 🔄 Backup cleanup attempt...")
-    closeAllOutlookTabs()
-  }, 1000)
-
-  // Final cleanup attempt
-  setTimeout(() => {
-    console.log("Auto OTP: 🔄 Final cleanup attempt...")
-    closeAllOutlookTabs()
-  }, 3000)
-
-  // Reset automation state
-  setTimeout(() => {
-    automationState = {
-      isEnabled: true,
-      outlookTabId: null,
-      clicTabId: null,
-      waitingForOTP: false,
-      waitingForNewOTP: false,
-      autoLoginEnabled: true,
-      lastFailedOTP: null,
-    }
-    chrome.storage.local.set({ automationState })
-    console.log("Auto OTP: ✅ Automation state reset for next use")
-  }, 2000)
-}
-
-function closeAllOutlookTabs() {
-  // Close tracked Outlook tab first
-  if (automationState.outlookTabId) {
-    console.log("Auto OTP: 🗑️ Closing tracked Outlook tab:", automationState.outlookTabId)
-    chrome.tabs.remove(automationState.outlookTabId, () => {
-      if (chrome.runtime.lastError) {
-        console.log("Error closing tracked Outlook tab:", chrome.runtime.lastError)
+                },
+                (response) => {
+                  if (chrome.runtime.lastError) {
+                    console.log("Error sending OTP to CLIC:", chrome.runtime.lastError)
+                  } else {
+                    console.log("OTP successfully sent to CLIC")
+                  }
+                },
+              )
+            }, 1000)
+          })
+        })
       } else {
-        console.log("Auto OTP: ✅ Tracked Outlook tab closed")
+        console.log("No CLIC tab found")
       }
     })
-    automationState.outlookTabId = null
   }
-
-  // Find and close ALL Outlook tabs SILENTLY
-  chrome.tabs.query({ url: "https://outlook.office.com/*" }, (tabs) => {
-    if (tabs.length > 0) {
-      console.log("Auto OTP: 🗑️ Silently closing", tabs.length, "Outlook tabs")
-
-      tabs.forEach((tab, index) => {
-        setTimeout(() => {
-          chrome.tabs.remove(tab.id, () => {
-            if (chrome.runtime.lastError) {
-              console.log(`❌ Error closing Outlook tab ${tab.id}:`, chrome.runtime.lastError)
-            } else {
-              console.log(`✅ Silently closed Outlook tab ${tab.id}`)
-            }
-
-            // Log completion when all tabs are processed
-            if (index === tabs.length - 1) {
-              setTimeout(() => {
-                console.log("Auto OTP: 🎉 ALL OUTLOOK TABS CLOSED SILENTLY!")
-              }, 200)
-            }
-          })
-        }, index * 200) // 200ms delay between each tab
-      })
-    } else {
-      console.log("Auto OTP: ℹ️ No Outlook tabs found to close")
-    }
-  })
 }
 
-function forceCloseOutlookTabs() {
-  console.log("Auto OTP: Force closing all Outlook tabs...")
+function handleOTPRequest(sender, isManual = false) {
+  console.log("Auto OTP: OTP requested", isManual ? "(Manual)" : "(Auto)")
 
+  automationState.waitingForOTP = true
+  automationState.clicTabId = sender.tab.id
+
+  // For manual requests or if no valid OTP, get fresh one
+  if (isManual || !otpData.isValid || Date.now() - otpData.timestamp > 180000) {
+    openOutlookForOTP()
+  } else {
+    // Use existing OTP - check if tab still exists first
+    chrome.tabs.get(sender.tab.id, (tab) => {
+      if (chrome.runtime.lastError) {
+        console.log("CLIC tab no longer exists")
+        return
+      }
+
+      chrome.tabs.sendMessage(
+        sender.tab.id,
+        {
+          action: "autoFillOTP",
+          otp: otpData.code,
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            console.log("Error sending existing OTP:", chrome.runtime.lastError)
+          }
+        },
+      )
+    })
+  }
+}
+
+function handleLoginSuccess() {
+  console.log("Auto OTP: ✅ LOGIN SUCCESS!")
+
+  // Clear OTP data
+  otpData = { code: null, timestamp: null, isValid: false }
+  automationState.waitingForOTP = false
+
+  // Close Outlook tabs
   chrome.tabs.query({ url: "https://outlook.office.com/*" }, (tabs) => {
-    if (tabs.length > 0) {
-      console.log("Auto OTP: Force closing", tabs.length, "Outlook tabs")
-
-      tabs.forEach((tab, index) => {
-        setTimeout(() => {
-          chrome.tabs.remove(tab.id, () => {
-            if (chrome.runtime.lastError) {
-              console.log(`Error force closing Outlook tab ${tab.id}:`, chrome.runtime.lastError)
-            } else {
-              console.log(`Auto OTP: Force closed Outlook tab ${tab.id}`)
-            }
-          })
-        }, index * 100) // Faster staggering
-      })
-    } else {
-      console.log("Auto OTP: No Outlook tabs found to force close")
-    }
+    tabs.forEach((tab) => {
+      chrome.tabs.remove(tab.id)
+    })
   })
 }
 
 function handleOTPFailure(request, sender) {
   console.log("Auto OTP: OTP failed:", request.failedOTP, "- Fetching latest OTP...")
-
-  // Mark this OTP as used and failed
-  if (request.failedOTP) {
-    otpData.usedCodes.add(request.failedOTP)
-    automationState.lastFailedOTP = request.failedOTP
-  }
-
-  // Set state to wait for new OTP
-  automationState.waitingForNewOTP = true
-  automationState.waitingForOTP = true
 
   // Invalidate current OTP
   otpData.isValid = false
@@ -360,105 +201,99 @@ function handleOTPFailure(request, sender) {
   })
 }
 
-function handleOTPRequest(sender) {
-  console.log("Auto OTP: OTP requested from CLIC")
+function openOutlookForOTP() {
+  console.log("Auto OTP: Opening Outlook for OTP")
 
-  if (!automationState.isEnabled) return
+  chrome.tabs.query({ url: "https://outlook.office.com/*" }, (tabs) => {
+    if (tabs.length > 0) {
+      // Use existing Outlook tab
+      const outlookTab = tabs[0]
 
-  automationState.waitingForOTP = true
-  automationState.clicTabId = sender.tab.id
+      // Check if tab still exists
+      chrome.tabs.get(outlookTab.id, (tab) => {
+        if (chrome.runtime.lastError) {
+          console.log("Outlook tab no longer exists, creating new one")
+          createNewOutlookTab()
+          return
+        }
 
-  // Check if we already have a valid and recent OTP (within last 3 minutes)
-  const isExpired = otpData.timestamp && Date.now() - otpData.timestamp > 180000 // 3 minutes
-  if (otpData.isValid && !isExpired && !otpData.usedCodes.has(otpData.code)) {
-    // Use existing OTP
-    setTimeout(() => {
-      try {
+        chrome.tabs.update(outlookTab.id, { active: true }, () => {
+          if (chrome.runtime.lastError) {
+            console.log("Error switching to Outlook tab:", chrome.runtime.lastError)
+            return
+          }
+
+          setTimeout(() => {
+            chrome.tabs.sendMessage(
+              outlookTab.id,
+              {
+                action: "autoScanLatestOTP",
+              },
+              (response) => {
+                if (chrome.runtime.lastError) {
+                  console.log("Error sending scan message:", chrome.runtime.lastError)
+                }
+              },
+            )
+          }, 1000)
+        })
+      })
+    } else {
+      createNewOutlookTab()
+    }
+  })
+}
+
+function createNewOutlookTab() {
+  // Open new Outlook tab
+  chrome.tabs.create(
+    {
+      url: "https://outlook.office.com/mail/",
+      active: true,
+    },
+    (tab) => {
+      if (chrome.runtime.lastError) {
+        console.log("Error creating Outlook tab:", chrome.runtime.lastError)
+        return
+      }
+
+      setTimeout(() => {
         chrome.tabs.sendMessage(
-          sender.tab.id,
+          tab.id,
           {
-            action: "autoFillOTP",
-            otp: otpData.code,
+            action: "autoScanLatestOTP",
           },
           (response) => {
             if (chrome.runtime.lastError) {
-              console.log("Error sending existing OTP:", chrome.runtime.lastError)
+              console.log("Error sending scan message to new tab:", chrome.runtime.lastError)
             }
           },
         )
-      } catch (error) {
-        console.log("Could not send existing OTP:", error)
-      }
-    }, 500)
-    return
-  }
-
-  // Clear old OTP and get fresh one
-  otpData = { code: null, timestamp: null, isValid: false, emailTimestamp: null, usedCodes: otpData.usedCodes }
-
-  // Open Outlook to get latest OTP
-  openOutlookForOTP()
+      }, 3000)
+    },
+  )
 }
 
-function openOutlookForOTP() {
-  console.log("Auto OTP: Opening Outlook to fetch latest OTP")
+function forceCloseOutlookTabs() {
+  console.log("Auto OTP: Force closing all Outlook tabs...")
 
-  // Check if Outlook is already open
   chrome.tabs.query({ url: "https://outlook.office.com/*" }, (tabs) => {
     if (tabs.length > 0) {
-      // Outlook already open, switch to it and trigger scan
-      const outlookTab = tabs[0]
-      automationState.outlookTabId = outlookTab.id
+      console.log("Auto OTP: Force closing", tabs.length, "Outlook tabs")
 
-      chrome.tabs.update(outlookTab.id, { active: true })
-
-      setTimeout(() => {
-        try {
-          chrome.tabs.sendMessage(
-            outlookTab.id,
-            {
-              action: "autoScanLatestOTP",
-            },
-            (response) => {
-              if (chrome.runtime.lastError) {
-                console.log("Error triggering scan:", chrome.runtime.lastError)
-              }
-            },
-          )
-        } catch (error) {
-          console.log("Could not trigger auto scan:", error)
-        }
-      }, 1000) // Shorter delay
-    } else {
-      // Open new Outlook tab
-      chrome.tabs.create(
-        {
-          url: "https://outlook.office.com/mail/",
-          active: true,
-        },
-        (tab) => {
-          automationState.outlookTabId = tab.id
-
-          // Wait for tab to load then trigger scan
-          setTimeout(() => {
-            try {
-              chrome.tabs.sendMessage(
-                tab.id,
-                {
-                  action: "autoScanLatestOTP",
-                },
-                (response) => {
-                  if (chrome.runtime.lastError) {
-                    console.log("Error triggering scan on new tab:", chrome.runtime.lastError)
-                  }
-                },
-              )
-            } catch (error) {
-              console.log("Could not trigger auto scan on new tab:", error)
+      tabs.forEach((tab, index) => {
+        setTimeout(() => {
+          chrome.tabs.remove(tab.id, () => {
+            if (chrome.runtime.lastError) {
+              console.log(`Error force closing Outlook tab ${tab.id}:`, chrome.runtime.lastError)
+            } else {
+              console.log(`Auto OTP: Force closed Outlook tab ${tab.id}`)
             }
-          }, 3000)
-        },
-      )
+          })
+        }, index * 100) // Faster staggering
+      })
+    } else {
+      console.log("Auto OTP: No Outlook tabs found to force close")
     }
   })
 }
@@ -473,7 +308,7 @@ chrome.storage.local.get(["automationState"], (result) => {
 // Clean up expired OTP data periodically
 setInterval(() => {
   if (otpData.timestamp && Date.now() - otpData.timestamp > 600000) {
-    otpData = { code: null, timestamp: null, isValid: false, emailTimestamp: null, usedCodes: new Set() }
+    otpData = { code: null, timestamp: null, isValid: false }
     chrome.storage.local.remove("otpData")
   }
 }, 60000)
